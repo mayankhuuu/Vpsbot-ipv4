@@ -1,6 +1,6 @@
 """
 ╔═══════════════════════════════════════════════════════╗
-║           NETHOST VPS Manager Bot                  ║
+║              DXD VPS Manager Bot                     ║
 ║  Server: 180GB RAM | 94 Core CPU | LXC Containers    ║
 ║  • LXC VPS containers with full systemd support      ║
 ║  • Full systemctl support                            ║
@@ -62,7 +62,7 @@ CPU_MAP = {
     "xeon":   "Intel(R) Xeon(R) Platinum 8480+ @ 3.80GHz",
 }
 
-DB_FILE = "NETHOST.db"
+DB_FILE = "DXD.db"
 
 # ─────────────────────────────────────────────────────
 # ANTI-MINING CONFIG
@@ -103,11 +103,11 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[
-        logging.FileHandler("NETHOST.log"),
+        logging.FileHandler("DXD.log"),
         logging.StreamHandler(),
     ],
 )
-log = logging.getLogger("NETHOST")
+log = logging.getLogger("DXD")
 
 # ─────────────────────────────────────────────────────
 # COLORS
@@ -117,7 +117,7 @@ GREEN  = 0x57F287
 RED    = 0xED4245
 YELLOW = 0xFEE75C
 DARK   = 0x2F3136
-FOOTER = "Powered by NETHOST"
+FOOTER = "Powered by DXD"
 
 # ─────────────────────────────────────────────────────
 # DATABASE
@@ -573,7 +573,7 @@ def find_free_port_for_node(node_id: str) -> int:
 
 def gen_redeem_code() -> str:
     part = lambda: "".join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(4))
-    return f"SN-{part()}-{part()}-{part()}"
+    return f"DX-{part()}-{part()}-{part()}"
 
 # ─────────────────────────────────────────────────────
 # EMBED HELPER
@@ -705,7 +705,7 @@ def next_id() -> str:
     try:
         result = lxc_command(["list", "--format", "csv"], check=False)
         for line in result.stdout.split("\n"):
-            if line and "NETHOST-vps-" in line:
+            if line and "DXD-vps-" in line:
                 try:
                     parts = line.split(",")
                     name = parts[0]
@@ -715,7 +715,7 @@ def next_id() -> str:
                     pass
     except:
         pass
-    return f"NETHOST-vps-{max(db_num, lxc_max + 1):04d}"
+    return f"DXD-vps-{max(db_num, lxc_max + 1):04d}"
 
 def gb(b): return round(b / 1024**3, 2)
 
@@ -822,31 +822,65 @@ def provision(vps_id, image, os_label, ram_mb, cpu_cores, disk_gb, cpu_name,
 
     log.info(f"[{vps_id}] Creating LXC container from {image}...")
     
-    create_args = [
-        "init", image, vps_id,
-        "--storage", LXC_STORAGE_POOL,
-        f"--storage-size={disk_gb}GB",
-        f"--memory={ram_mb}MB",
-        f"--cpu-cores={int(cpu_cores)}",
-        f"--network={LXC_NETWORK_BRIDGE}",
-        "-d"
-    ]
+    # Try different LXC syntax versions
+    try:
+        # Try with standard flags (newer LXC)
+        create_args = [
+            "init", image, vps_id,
+            "--storage", LXC_STORAGE_POOL,
+            "--network", LXC_NETWORK_BRIDGE,
+            "-d"
+        ]
+        
+        log.info(f"[{vps_id}] Attempting to create container with basic flags...")
+        lxc_command(create_args)
+        
+    except Exception as e:
+        log.warning(f"[{vps_id}] Basic init failed: {e}")
+        log.info(f"[{vps_id}] Trying with alternate syntax...")
+        
+        # Try alternate syntax for older LXC
+        try:
+            # Create with just image and name first
+            lxc_command(["init", image, vps_id, "-d"])
+        except Exception as e2:
+            log.error(f"[{vps_id}] Both init attempts failed: {e2}")
+            raise RuntimeError(f"Failed to create LXC container: {e2}")
     
-    if ram_mb > 512:
-        create_args.append(f"--swap={int(ram_mb * 0.5)}MB")
+    # Wait for container to be created
+    time.sleep(2)
+    
+    # Now set all the configuration using config set commands
+    log.info(f"[{vps_id}] Setting container configuration...")
     
     try:
-        lxc_command(create_args)
+        # Set memory limit
+        lxc_command(["config", "set", vps_id, "limits.memory", f"{ram_mb}MB"])
+        log.info(f"[{vps_id}] Memory limit set to {ram_mb}MB")
     except Exception as e:
-        log.warning(f"[{vps_id}] Storage size param may not be supported, retrying...")
-        create_args.remove(f"--storage-size={disk_gb}GB")
-        lxc_command(create_args)
-        lxc_command(["config", "set", vps_id, "limits.disk.size", f"{disk_gb}GB"])
+        log.warning(f"[{vps_id}] Failed to set memory limit: {e}")
     
-    log.info(f"[{vps_id}] Configuring container...")
-    lxc_command(["config", "set", vps_id, "limits.cpu", str(int(cpu_cores))])
-    lxc_command(["config", "set", vps_id, "security.nesting", "true"])
-    lxc_command(["config", "set", vps_id, "security.privileged", "true"])
+    try:
+        # Set CPU limit
+        lxc_command(["config", "set", vps_id, "limits.cpu", str(int(cpu_cores))])
+        log.info(f"[{vps_id}] CPU limit set to {int(cpu_cores)} cores")
+    except Exception as e:
+        log.warning(f"[{vps_id}] Failed to set CPU limit: {e}")
+    
+    try:
+        # Set disk size (if supported)
+        lxc_command(["config", "set", vps_id, "limits.disk.size", f"{disk_gb}GB"])
+        log.info(f"[{vps_id}] Disk size set to {disk_gb}GB")
+    except Exception as e:
+        log.warning(f"[{vps_id}] Failed to set disk size: {e}")
+    
+    try:
+        # Enable nesting for systemd
+        lxc_command(["config", "set", vps_id, "security.nesting", "true"])
+        lxc_command(["config", "set", vps_id, "security.privileged", "true"])
+        log.info(f"[{vps_id}] Security settings configured")
+    except Exception as e:
+        log.warning(f"[{vps_id}] Failed to set security settings: {e}")
     
     log.info(f"[{vps_id}] Starting container...")
     lxc_start(vps_id)
@@ -869,20 +903,20 @@ def provision(vps_id, image, os_label, ram_mb, cpu_cores, disk_gb, cpu_name,
         "iproute2 htop systemd systemd-sysv", check=False)
     
     log.info(f"[{vps_id}] Setting up fake /proc files...")
-    lxc_exec(vps_id, "mkdir -p /etc/NETHOST", check=False)
-    lxc_file_push(vps_id, fake_meminfo(ram_mb), "/etc/NETHOST/meminfo")
-    lxc_file_push(vps_id, fake_cpuinfo(cpu_cores, cpu_name), "/etc/NETHOST/cpuinfo")
+    lxc_exec(vps_id, "mkdir -p /etc/DXD", check=False)
+    lxc_file_push(vps_id, fake_meminfo(ram_mb), "/etc/DXD/meminfo")
+    lxc_file_push(vps_id, fake_cpuinfo(cpu_cores, cpu_name), "/etc/DXD/cpuinfo")
     
     mount_script = """#!/bin/bash
-mount --bind /etc/NETHOST/meminfo /proc/meminfo 2>/dev/null
-mount --bind /etc/NETHOST/cpuinfo /proc/cpuinfo 2>/dev/null
+mount --bind /etc/DXD/meminfo /proc/meminfo 2>/dev/null
+mount --bind /etc/DXD/cpuinfo /proc/cpuinfo 2>/dev/null
 exit 0
 """
     lxc_file_push(vps_id, mount_script, "/etc/rc.local")
     lxc_exec(vps_id, "chmod +x /etc/rc.local", check=False)
     lxc_exec(vps_id, 
-        "mount --bind /etc/NETHOST/meminfo /proc/meminfo 2>/dev/null; "
-        "mount --bind /etc/NETHOST/cpuinfo /proc/cpuinfo 2>/dev/null", 
+        "mount --bind /etc/DXD/meminfo /proc/meminfo 2>/dev/null; "
+        "mount --bind /etc/DXD/cpuinfo /proc/cpuinfo 2>/dev/null", 
         check=False)
     
     ci = int(cpu_cores) if cpu_cores == int(cpu_cores) else cpu_cores
@@ -891,7 +925,7 @@ exit 0
     
     motd = f"""
   ╔══════════════════════════════════╗
-  ║        🐉  NETHOST VPS           ║
+  ║          🐉  DXD VPS            ║
   ╠══════════════════════════════════╣
   ║  VPS ID : {vps_id:<24}║
   ║  RAM    : {str(ram_mb)+' MB':<24}║
@@ -959,7 +993,7 @@ grep -q '^PasswordAuthentication' /etc/ssh/sshd_config || echo 'PasswordAuthenti
     log.info(f"[{vps_id}] tmate SSH ready: {ssh}")
     
     lxc_command(["config", "set", vps_id, "user.vps-id", vps_id])
-    lxc_command(["config", "set", vps_id, "user.managed-by", "NETHOST"])
+    lxc_command(["config", "set", vps_id, "user.managed-by", "DXD"])
     
     return vps_id, ssh, container_ip
 
@@ -1216,7 +1250,7 @@ async def do_create(ix, user, ram, cpu, disk, os_key, cpu_key, days=0, node_id=N
 intents         = discord.Intents.default()
 intents.members = True
 
-class NETHOST(commands.Bot):
+class DXD(commands.Bot):
     def __init__(self):
         super().__init__(command_prefix="!", intents=intents)
 
@@ -1230,6 +1264,8 @@ class NETHOST(commands.Bot):
 
     async def on_ready(self):
         log.info(f"Online as {self.user}")
+        await self.tree.sync()
+        log.info("Commands re-synced on ready.")
         if not auto_suspend.is_running():
             auto_suspend.start()
         if not update_status.is_running():
@@ -1237,7 +1273,7 @@ class NETHOST(commands.Bot):
         if ANTI_MINING_ENABLED and not anti_mining_scan.is_running():
             anti_mining_scan.start()
 
-bot = NETHOST()
+bot = DXD()
 
 # ─────────────────────────────────────────────────────
 # LIVE STATUS TASK
@@ -1251,7 +1287,7 @@ async def update_status():
             ).fetchone()["n"]
         await bot.change_presence(activity=discord.Activity(
             type=discord.ActivityType.watching,
-            name=f"VPS | {count} VPS Running"))
+            name=f"DXD | {count} VPS Running"))
     except Exception as e:
         log.warning(f"Status update failed: {e}")
 
@@ -1349,7 +1385,7 @@ async def _before_anti_mining():
 # ══════════════════════════════════════════════
 
 @bot.tree.command(name="start", description="Start your VPS.")
-@app_commands.describe(vps_id="e.g. NETHOST-vps-0001")
+@app_commands.describe(vps_id="e.g. DXD-vps-0001")
 async def cmd_start(ix: discord.Interaction, vps_id: str):
     await ix.response.defer(ephemeral=True)
     vps_id = vps_id.lower()
@@ -1376,7 +1412,7 @@ async def cmd_start(ix: discord.Interaction, vps_id: str):
 
 
 @bot.tree.command(name="stop", description="Stop your VPS.")
-@app_commands.describe(vps_id="e.g. NETHOST-vps-0001")
+@app_commands.describe(vps_id="e.g. DXD-vps-0001")
 async def cmd_stop(ix: discord.Interaction, vps_id: str):
     await ix.response.defer(ephemeral=True)
     vps_id = vps_id.lower()
@@ -1395,7 +1431,7 @@ async def cmd_stop(ix: discord.Interaction, vps_id: str):
 
 
 @bot.tree.command(name="restart", description="Restart your VPS.")
-@app_commands.describe(vps_id="e.g. NETHOST-vps-0001")
+@app_commands.describe(vps_id="e.g. DXD-vps-0001")
 async def cmd_restart(ix: discord.Interaction, vps_id: str):
     await ix.response.defer(ephemeral=True)
     vps_id = vps_id.lower()
@@ -1417,7 +1453,7 @@ async def cmd_restart(ix: discord.Interaction, vps_id: str):
 
 
 @bot.tree.command(name="reinstall", description="Reinstall your VPS (same specs, data wiped).")
-@app_commands.describe(vps_id="e.g. NETHOST-vps-0001")
+@app_commands.describe(vps_id="e.g. DXD-vps-0001")
 async def cmd_reinstall(ix: discord.Interaction, vps_id: str):
     await ix.response.defer(ephemeral=True)
     vps_id = vps_id.lower()
@@ -1462,7 +1498,7 @@ async def cmd_reinstall(ix: discord.Interaction, vps_id: str):
 
 
 @bot.tree.command(name="regen-ssh", description="Get a fresh tmate SSH session.")
-@app_commands.describe(vps_id="e.g. NETHOST-vps-0001")
+@app_commands.describe(vps_id="e.g. DXD-vps-0001")
 async def cmd_regen(ix: discord.Interaction, vps_id: str):
     await ix.response.defer(ephemeral=True)
     vps_id = vps_id.lower()
@@ -1488,7 +1524,7 @@ async def cmd_regen(ix: discord.Interaction, vps_id: str):
 
 
 @bot.tree.command(name="vps-performance", description="Live stats for your VPS.")
-@app_commands.describe(vps_id="e.g. NETHOST-vps-0001")
+@app_commands.describe(vps_id="e.g. DXD-vps-0001")
 async def cmd_perf(ix: discord.Interaction, vps_id: str):
     await ix.response.defer(ephemeral=True)
     vps_id = vps_id.lower()
@@ -1577,19 +1613,15 @@ async def cmd_my_vps(ix: discord.Interaction):
 @bot.tree.command(name="commands", description="Show all commands.")
 async def cmd_commands(ix: discord.Interaction):
     await ix.response.defer(ephemeral=True)
+    
+    # Get all commands
+    commands_list = await bot.tree.fetch_commands()
+    commands_text = "\n".join([f"• `/{cmd.name}` - {cmd.description}" for cmd in commands_list])
+    
     u = em("👤 User Commands", 
-           "⚠️ **1 VPS limit** — you can only have 1 VPS at a time.", 
-           BLUE, fields=[
-        ("`/start <id>`",           "▶️  Start VPS",                      False),
-        ("`/stop <id>`",            "⏹️  Stop VPS",                       False),
-        ("`/restart <id>`",         "🔄  Restart VPS",                    False),
-        ("`/reinstall <id>`",       "🔁  Wipe & reinstall",               False),
-        ("`/regen-ssh <id>`",       "🔑  Fresh tmate SSH session",        False),
-        ("`/vps-performance <id>`", "📊  Live CPU/RAM/Disk/Net stats",    False),
-        ("`/my-vps`",               "📋  List your VPS instances",        False),
-        ("`/redeem <code>`",        "🎟️  Redeem a VPS code",              False),
-        ("`/commands`",             "📖  This help",                      False),
-    ])
+           f"Total commands: {len(commands_list)}\n\n{commands_text}", 
+           BLUE)
+    
     a = em("🛡️ Admin Commands", "", RED, fields=[
         ("`/deploy <user>`",                                     "🎛️  1-click deploy (32GB/4CPU/80GB)", False),
         ("`/create <user> <ram> <cpu> <disk> <os> <cpu> <days>`","➕  Full param create",               False),
@@ -1617,7 +1649,7 @@ async def cmd_commands(ix: discord.Interaction):
         ("`/resolve-mining <log_id>`",                           "✅  Mark mining as resolved",         False),
     ])
     r = em("📖 Reference", "", DARK, fields=[
-        ("VPS ID",      "`NETHOST-vps-0001`, `NETHOST-vps-0002` ...",                 False),
+        ("VPS ID",      "`DXD-vps-0001`, `DXD-vps-0002` ...",                 False),
         ("OS",          "`ubuntu20` `ubuntu22` `ubuntu24` `debian11` `debian12`",        False),
         ("CPU",         "`ryzen9` → AMD Ryzen 9 9950X\n`xeon` → Intel Xeon Platinum 8480+", False),
         ("SSH Access",  "tmate SSH only — sent to DM, never public",                     False),
@@ -2338,7 +2370,7 @@ async def cmd_ptero(ix: discord.Interaction):
 # 1-CLICK DEPLOY
 # ══════════════════════════════════════════════
 
-class DeployModal(discord.ui.Modal, title="🐉 NETHOST — Deploy VPS"):
+class DeployModal(discord.ui.Modal, title="🐉 DXD — Deploy VPS"):
     ram  = discord.ui.TextInput(
         label="RAM (MB)", 
         placeholder="32768",
@@ -2572,5 +2604,5 @@ if __name__ == "__main__":
         raise SystemExit(1)
     
     init_db()
-    log.info("Starting NETHOST VPS Manager (LXC) with Anti-Mining...")
+    log.info("Starting DXD VPS Manager (LXC) with Anti-Mining...")
     bot.run(DISCORD_TOKEN, log_handler=None)
