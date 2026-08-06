@@ -432,7 +432,7 @@ def detect_mining_activity(container_name: str) -> dict:
         log.error(f"Error detecting mining in {container_name}: {e}")
         return results
 
-def handle_mining_detection(vps_id: str, container_name: str, detection_results: dict) -> str:
+async def handle_mining_detection(vps_id: str, container_name: str, detection_results: dict) -> str:
     """
     Handle the detection of mining activity.
     Returns the action taken as a string.
@@ -455,7 +455,6 @@ def handle_mining_detection(vps_id: str, container_name: str, detection_results:
             "Suspended" if ANTI_MINING_SUSPEND_ON_DETECT else "Warning"
         ))
         
-        # Update mining flag
         c.execute("UPDATE vps SET mining_flag=1 WHERE vps_id=?", (vps_id,))
     
     # Suspend the container if configured
@@ -1327,7 +1326,7 @@ async def anti_mining_scan():
                 
                 if results["detected"]:
                     detected_count += 1
-                    action = handle_mining_detection(vps_id, container_name, results)
+                    action = await handle_mining_detection(vps_id, container_name, results)
                     log.warning(f"[{vps_id}] Mining detected, action: {action}")
                     
             except Exception as e:
@@ -1614,6 +1613,8 @@ async def cmd_commands(ix: discord.Interaction):
         ("`/scan-vps <id>`",                                     "🔍  Scan VPS for mining",             False),
         ("`/mining-stats`",                                      "📊  Anti-mining statistics",          False),
         ("`/toggle-mining <true/false>`",                        "⏹️  Enable/disable anti-mining",     False),
+        ("`/mining-logs`",                                       "📋  View mining detection logs",      False),
+        ("`/resolve-mining <log_id>`",                           "✅  Mark mining as resolved",         False),
     ])
     r = em("📖 Reference", "", DARK, fields=[
         ("VPS ID",      "`NETHOST-vps-0001`, `NETHOST-vps-0002` ...",                 False),
@@ -2066,7 +2067,7 @@ async def cmd_scan_vps(ix: discord.Interaction, vps_id: str):
         )
         
         if results["detected"]:
-            action = handle_mining_detection(vps_id, container_name, results)
+            action = await handle_mining_detection(vps_id, container_name, results)
             fields = [
                 ("🔴 Detected", "Yes", True),
                 ("CPU Usage", f"{results['cpu_usage']}%", True),
