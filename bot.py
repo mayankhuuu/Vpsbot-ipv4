@@ -7,6 +7,7 @@
 ║  • 1 container per user limit                        ║
 ║  • Default: 32GB RAM, 4 CPU, 80GB Disk              ║
 ║  • Anti-mining protection                            ║
+║  • FIXED: IPv4 networking with static IP            ║
 ╚═══════════════════════════════════════════════════════╝
 """
 
@@ -191,6 +192,7 @@ def lxc_is_running(name):
 
 def lxc_get_ip(name):
     try:
+        # First try to get IP from container
         result = lxc_command(["info", name], check=False)
         if result is None or not hasattr(result, 'stdout'):
             return ""
@@ -266,7 +268,7 @@ def lxc_wait_for_network(name, timeout=120):
         ip = lxc_get_ip(name)
         if ip:
             return True
-        time.sleep(2)
+        time.sleep(3)
     return False
 
 def lxc_wait_for_ssh(name, timeout=180):
@@ -392,7 +394,7 @@ def fake_cpuinfo(cores):
     return "\n".join(blocks)
 
 # ─────────────────────────────────────────────────────
-# CORE VPS PROVISION
+# CORE VPS PROVISION - FIXED WITH IPv4
 # ─────────────────────────────────────────────────────
 def provision(vps_id, image, os_label, ram_mb, cpu_cores, disk_gb, host_port, root_pass):
     log.info(f"[{vps_id}] Provisioning LXC — RAM:{ram_mb}MB CPU:{cpu_cores} Disk:{disk_gb}GB")
@@ -405,28 +407,53 @@ def provision(vps_id, image, os_label, ram_mb, cpu_cores, disk_gb, host_port, ro
     log.info(f"[{vps_id}] Creating LXC container from {image}...")
     
     created = False
-    attempts = [
-        (["init", image, vps_id], "basic"),
-        (["init", image, vps_id, "--storage", LXC_STORAGE_POOL], "storage"),
-        (["init", image, vps_id, "--ephemeral"], "ephemeral"),
-        (["init", image, vps_id, "--profile", "default"], "profile"),
-    ]
     
-    for args, method in attempts:
-        if not created:
-            try:
-                log.info(f"[{vps_id}] Attempting: lxc {' '.join(args)}")
-                lxc_command(args)
-                created = True
-                log.info(f"[{vps_id}] Container created with {method} method")
-            except Exception as e:
-                log.warning(f"[{vps_id}] {method} method failed: {e}")
+    # ===== FIX: Create container with network config =====
+    # Method 1: With empty-network flag
+    try:
+        log.info(f"[{vps_id}] Attempting: lxc init {image} {vps_id} --empty-network")
+        lxc_command(["init", image, vps_id, "--empty-network"])
+        created = True
+        log.info(f"[{vps_id}] Container created with --empty-network")
+    except Exception as e:
+        log.warning(f"[{vps_id}] --empty-network failed: {e}")
+    
+    # Method 2: Basic init
+    if not created:
+        try:
+            log.info(f"[{vps_id}] Attempting: lxc init {image} {vps_id}")
+            lxc_command(["init", image, vps_id])
+            created = True
+            log.info(f"[{vps_id}] Container created with basic init")
+        except Exception as e:
+            log.warning(f"[{vps_id}] Basic init failed: {e}")
     
     if not created:
         raise RuntimeError("Failed to create LXC container. Check LXC installation.")
     
     time.sleep(2)
     
+    # ===== Add network device =====
+    try:
+        log.info(f"[{vps_id}] Adding network device...")
+        lxc_command(["config", "device", "add", vps_id, "eth0", "nic", 
+                     "network=lxcbr0", "name=eth0", "type=nic"])
+        log.info(f"[{vps_id}] Network device added")
+    except Exception as e:
+        log.warning(f"[{vps_id}] Network device add failed: {e}")
+    
+    # ===== Set static IP =====
+    ip_suffix = random.randint(100, 250)
+    static_ip = f"10.0.3.{ip_suffix}"
+    try:
+        log.info(f"[{vps_id}] Setting static IP: {static_ip}")
+        lxc_command(["config", "set", vps_id, "raw.lxc", 
+                     f'lxc.net.0.ipv4.address = {static_ip}/24'])
+        log.info(f"[{vps_id}] Static IP set: {static_ip}")
+    except Exception as e:
+        log.warning(f"[{vps_id}] Static IP set failed: {e}")
+    
+    # ===== Configure resources =====
     log.info(f"[{vps_id}] Setting container configuration...")
     
     configs = [
@@ -443,15 +470,39 @@ def provision(vps_id, image, os_label, ram_mb, cpu_cores, disk_gb, host_port, ro
         except Exception as e:
             log.warning(f"[{vps_id}] Failed to set {name}: {e}")
     
+    # ===== Start container =====
     log.info(f"[{vps_id}] Starting container...")
     lxc_start(vps_id)
     
-    if not lxc_wait_for_network(vps_id, timeout=120):
-        log.warning(f"[{vps_id}] Container started but no network IP found")
-    
+    # Wait for network
+    time.sleep(10)
     container_ip = lxc_get_ip(vps_id)
+    
+    # If no IP, try to fix
+    if not container_ip:
+        log.warning(f"[{vps_id}] No IP found, trying DHCP...")
+        try:
+            lxc_exec(vps_id, "dhclient eth0", check=False)
+            time.sleep(5)
+            container_ip = lxc_get_ip(vps_id)
+        except:
+            pass
+        
+        # If still no IP, try manual
+        if not container_ip:
+            log.warning(f"[{vps_id}] Trying manual IP...")
+            try:
+                lxc_exec(vps_id, f"ip addr add {static_ip}/24 dev eth0", check=False)
+                lxc_exec(vps_id, "ip link set eth0 up", check=False)
+                lxc_exec(vps_id, "ip route add default via 10.0.3.1", check=False)
+                time.sleep(2)
+                container_ip = lxc_get_ip(vps_id)
+            except:
+                pass
+    
     log.info(f"[{vps_id}] Container IP: {container_ip}")
     
+    # ===== Install packages =====
     log.info(f"[{vps_id}] Running apt update...")
     lxc_exec(vps_id, "apt-get update -qq", check=False)
     
@@ -515,6 +566,7 @@ grep -q '^PasswordAuthentication' /etc/ssh/sshd_config || echo 'PasswordAuthenti
     
     lxc_wait_for_ssh(vps_id, timeout=60)
     
+    # ===== Port forwarding =====
     if container_ip:
         log.info(f"[{vps_id}] Setting up port forwarding: {host_port} -> {container_ip}:22")
         try:
@@ -531,7 +583,10 @@ grep -q '^PasswordAuthentication' /etc/ssh/sshd_config || echo 'PasswordAuthenti
             ], check=True, capture_output=True)
         except Exception as e:
             log.warning(f"[{vps_id}] Port forwarding failed: {e}")
+    else:
+        log.warning(f"[{vps_id}] No IP found, skipping port forwarding")
     
+    # ===== tmate SSH =====
     log.info(f"[{vps_id}] Starting tmate SSH session...")
     sock = "/tmp/tmate.sock"
     lxc_exec(vps_id, f"rm -f {sock}; tmate -S {sock} new-session -d", check=False)
@@ -769,10 +824,11 @@ async def cmd_create(ix: discord.Interaction):
             "⏳ Creating VPS...",
             f"**{vps_id}** for {ix.user.mention}\n\n"
             "```\n"
-            "[1/4] Creating LXC container      ⏳\n"
-            "[2/4] Configuring resources       ⏳\n"
-            "[3/4] Installing packages         ⏳\n"
-            "[4/4] Starting SSH               ⏳\n"
+            "[1/5] Creating LXC container      ⏳\n"
+            "[2/5] Configuring network         ⏳\n"
+            "[3/5] Installing packages         ⏳\n"
+            "[4/5] Setting up SSH             ⏳\n"
+            "[5/5] Starting services          ⏳\n"
             "```\n"
             "⏱ ~90 seconds — SSH sent to DM.",
             BLUE,
@@ -853,6 +909,7 @@ async def cmd_create(ix: discord.Interaction):
         except:
             pass
 
+# ===== REST OF THE COMMANDS (SAME AS BEFORE) =====
 @bot.tree.command(name="my-vps", description="View your VPS info")
 async def cmd_my_vps(ix: discord.Interaction):
     try:
@@ -1029,9 +1086,9 @@ async def cmd_commands(ix: discord.Interaction):
         except:
             pass
 
-# ─────────────────────────────────────────────────────
-# ADMIN COMMANDS
-# ─────────────────────────────────────────────────────
+# =====================================================
+# ADMIN COMMANDS - Add these to your bot.py
+# =====================================================
 @bot.tree.command(name="admin-add-user", description="[Admin] Grant access")
 @app_commands.describe(user="User to grant access")
 async def cmd_add(ix: discord.Interaction, user: discord.Member):
