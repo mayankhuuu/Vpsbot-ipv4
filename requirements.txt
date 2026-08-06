@@ -4,3 +4,26 @@ psutil>=5.9.8
 requests>=2.31.0
 python-dotenv>=1.0.1
 aiohttp>=3.9.0
+# ─────────────────────────────────────────────────────
+# DXD VPS Manager Bot - Complete Requirements
+# ─────────────────────────────────────────────────────
+
+# Core
+discord.py>=2.3.0,<3.0.0
+psutil>=5.9.0
+requests>=2.31.0
+aiohttp>=3.8.0
+python-dotenv>=1.0.0
+
+# Optional - Better performance
+aiodns>=3.0.0
+cchardet>=2.1.7
+
+# Optional - Voice support (if needed)
+# PyNaCl>=1.5.0
+
+# Optional - Database (SQLite is built-in)
+# sqlalchemy>=2.0.0
+
+# Optional - YAML config support
+# pyyaml>=6.0.0
