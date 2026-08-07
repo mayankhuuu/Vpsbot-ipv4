@@ -98,7 +98,7 @@ if you're on AWS, GCP, Azure, Contabo, Hetzner, etc.
 ### 7. Run the bot
 
 ```bash
-python3 Nethost_bot.py
+python3 bot.py
 ```
 
 You should see:
@@ -111,18 +111,18 @@ Starting StoneNodes VPS Manager...
 
 ### 8. Keep it running 24/7
 
-Create `/etc/systemd/system/NETHOST.service`:
+Create `/etc/systemd/system/dxd.service`:
 
 ```ini
 [Unit]
-Description=NETHOST VPS Manager Bot
+Description= VPS Manager Bot
 After=docker.service network.target
 Requires=docker.service
 
 [Service]
 Type=simple
 WorkingDirectory=/root/vpsbot-v4
-ExecStart=/root/vpsbot-v4/venv/bin/python3 Nethost_bot.py
+ExecStart=/root/vpsbot-v4/venv/bin/python3 bot.py
 Restart=always
 RestartSec=5
 
@@ -132,9 +132,9 @@ WantedBy=multi-user.target
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable NETHOST
-sudo systemctl start NETHOST
-sudo systemctl status NETHOST
+sudo systemctl enable dxd
+sudo systemctl start dxd
+sudo systemctl status dxd
 journalctl -u NETHOST -f     # live logs
 ```
 
