@@ -42,13 +42,10 @@ git clone https://github.com/mayankhuuu/Vpsbot-ipv4.git
 cd Vpsbot-ipv4
 ```
 
-### 2. Install Docker
+### 2. Install lxc
 
 ```bash
-curl -fsSL https://get.docker.com | sh
-sudo systemctl enable docker
-sudo systemctl start docker
-docker ps   # should list (empty) with no errors
+lxc init
 ```
 
 ### 3. Install Python & dependencies
