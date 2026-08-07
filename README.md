@@ -1,4 +1,4 @@
-```markdown
+
 # DXD VPS Manager Bot
 
 A Discord bot that deploys and manages **LXC-based VPS containers**, with full
@@ -155,8 +155,8 @@ Wants=network.target lxc-net.service
 Type=simple
 User=root
 WorkingDirectory=/opt/nethost
-Environment="PATH=/opt/nethost/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-ExecStart=/opt/nethost/venv/bin/python3 /opt/nethost/bot.py
+WorkingDirectory=/root/vpsbot-v4
+ExecStart=/root/vpsbot-v4/venv/bin/python3 bot.py
 Restart=always
 RestartSec=10
 StandardOutput=append:/var/log/nethost/bot.log
