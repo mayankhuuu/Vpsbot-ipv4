@@ -10,7 +10,7 @@
 ║  • FIXED: IPv4 networking with lxcbr0               ║
 ║  • TMATE Backup SSH included                         ║
 ║  • Admin can create VPS for any user                 ║
-║  • !deploy command for users                         ║
+║  • !deploy command for ALL users                     ║
 ╚═══════════════════════════════════════════════════════╝
 """
 
@@ -397,7 +397,7 @@ def fake_cpuinfo(cores):
     return "\n".join(blocks)
 
 # ─────────────────────────────────────────────────────
-# CORE VPS PROVISION - NO SSHX
+# CORE VPS PROVISION
 # ─────────────────────────────────────────────────────
 def provision(vps_id, image, os_label, ram_mb, cpu_cores, disk_gb, host_port, root_pass):
     log.info(f"[{vps_id}] Provisioning LXC — RAM:{ram_mb}MB CPU:{cpu_cores} Disk:{disk_gb}GB")
@@ -642,7 +642,7 @@ def get_user_vps(uid):
 # ─────────────────────────────────────────────────────
 intents = discord.Intents.default()
 intents.members = True
-intents.message_content = True  # For prefix commands
+intents.message_content = True
 
 class DXD(commands.Bot):
     def __init__(self):
@@ -773,7 +773,7 @@ async def _before_anti_mining():
     await bot.wait_until_ready()
 
 # ─────────────────────────────────────────────────────
-# USER COMMANDS
+# USER COMMANDS (SLASH)
 # ─────────────────────────────────────────────────────
 @bot.tree.command(name="my-vps", description="View your VPS info")
 async def cmd_my_vps(ix: discord.Interaction):
@@ -1018,7 +1018,7 @@ async def cmd_delete_vps(ix: discord.Interaction):
             pass
 
 # ─────────────────────────────────────────────────────
-# ADMIN COMMANDS
+# ADMIN COMMANDS (SLASH)
 # ─────────────────────────────────────────────────────
 @bot.tree.command(name="admin-add-user", description="[Admin] Grant access")
 @app_commands.describe(user="User to grant access")
@@ -1411,11 +1411,11 @@ async def cmd_resolve_mining(ix: discord.Interaction, log_id: int):
             pass
 
 # ─────────────────────────────────────────────────────
-# PREFIX COMMANDS (!)
+# PREFIX COMMANDS (!) - FOR ALL USERS
 # ─────────────────────────────────────────────────────
 @bot.command(name="deploy")
 async def cmd_deploy_prefix(ctx: commands.Context):
-    """Deploy your own VPS (6 CPU, 32GB RAM, 80GB Disk)"""
+    """Deploy your own VPS (6 CPU, 32GB RAM, 80GB Disk) - FOR ALL USERS"""
     try:
         # Check if user already has VPS (1 VPS per user)
         if has_vps(ctx.author.id):
@@ -1426,16 +1426,7 @@ async def cmd_deploy_prefix(ctx: commands.Context):
             ))
             return
         
-        # Check if user is allowed
-        with get_db() as c:
-            allowed = c.execute("SELECT 1 FROM allowed_users WHERE user_id=?", (ctx.author.id,)).fetchone()
-            if not allowed and not is_admin_prefix(ctx.author):
-                await ctx.send(embed=em(
-                    "⛔ Not Authorized",
-                    "You are not authorized to create a VPS. Contact an admin.",
-                    RED
-                ))
-                return
+        # ✅ NO AUTHORIZATION CHECK - SAB KE LIYE ALLOWED
         
         vps_id = next_id()
         root_pass = gen_root_password()
@@ -1542,7 +1533,7 @@ async def cmd_commands(ix: discord.Interaction):
         await ix.response.defer(ephemeral=True)
         
         u = em("👤 User Commands", "VPS Management (Default: 32GB RAM, 6 CPU, 80GB Disk)", BLUE, [
-            ("`!deploy`", "Deploy your VPS (6 CPU, 32GB RAM, 80GB Disk)", False),
+            ("`!deploy`", "Deploy your VPS (6 CPU, 32GB RAM, 80GB Disk) - ALL USERS", False),
             ("`/my-vps`", "View your VPS info", False),
             ("`/start`", "Start your VPS", False),
             ("`/stop`", "Stop your VPS", False),
