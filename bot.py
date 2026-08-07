@@ -11,6 +11,8 @@
 ║  • TMATE Backup SSH included                         ║
 ║  • Admin can create VPS for any user                 ║
 ║  • !deploy command for ALL users                     ║
+║  • NO IP in SSH commands - only port                 ║
+║  • FIXED: Container busy error                       ║
 ╚═══════════════════════════════════════════════════════╝
 """
 
@@ -54,7 +56,7 @@ for x in os.getenv("ADMIN_USER_IDS", "").split(","):
     if x.strip().isdigit():
         ADMIN_USER_IDS.add(int(x.strip()))
 
-SERVER_IP = os.getenv("SERVER_IP", "127.0.0.1")
+SERVER_IP = os.getenv("SERVER_IP", "")
 SSH_PORT_START = int(os.getenv("SSH_PORT_START", "20000"))
 SSH_PORT_END = int(os.getenv("SSH_PORT_END", "29999"))
 
@@ -397,27 +399,50 @@ def fake_cpuinfo(cores):
     return "\n".join(blocks)
 
 # ─────────────────────────────────────────────────────
-# CORE VPS PROVISION
+# CORE VPS PROVISION - FIXED WITH RETRY
 # ─────────────────────────────────────────────────────
 def provision(vps_id, image, os_label, ram_mb, cpu_cores, disk_gb, host_port, root_pass):
     log.info(f"[{vps_id}] Provisioning LXC — RAM:{ram_mb}MB CPU:{cpu_cores} Disk:{disk_gb}GB")
 
+    # ===== FIX: Force remove if exists =====
     if lxc_exists(vps_id):
-        log.warning(f"[{vps_id}] Removing leftover container")
-        lxc_delete(vps_id)
+        log.warning(f"[{vps_id}] Container already exists, removing...")
+        subprocess.run(["lxc", "stop", vps_id, "--force"], capture_output=True, text=True)
         time.sleep(2)
+        subprocess.run(["lxc", "delete", vps_id, "--force"], capture_output=True, text=True)
+        time.sleep(3)
+        log.info(f"[{vps_id}] Old container removed")
 
     log.info(f"[{vps_id}] Creating LXC container from {image}...")
+    time.sleep(2)
     
-    try:
-        lxc_command(["init", image, vps_id])
-        log.info(f"[{vps_id}] Container created")
-    except Exception as e:
-        log.warning(f"[{vps_id}] Init failed: {e}")
-        raise
+    # ===== FIX: Retry mechanism =====
+    created = False
+    attempts = 0
+    max_attempts = 3
+    
+    while not created and attempts < max_attempts:
+        attempts += 1
+        try:
+            log.info(f"[{vps_id}] Attempt {attempts}: lxc init {image} {vps_id}")
+            lxc_command(["init", image, vps_id])
+            created = True
+            log.info(f"[{vps_id}] Container created on attempt {attempts}")
+        except Exception as e:
+            log.warning(f"[{vps_id}] Attempt {attempts} failed: {e}")
+            if attempts < max_attempts:
+                time.sleep(3)
+                subprocess.run(["lxc", "stop", vps_id, "--force"], capture_output=True)
+                time.sleep(1)
+                subprocess.run(["lxc", "delete", vps_id, "--force"], capture_output=True)
+                time.sleep(2)
+    
+    if not created:
+        raise RuntimeError(f"Failed to create container after {max_attempts} attempts")
     
     time.sleep(2)
     
+    # ===== REST OF THE CODE =====
     try:
         lxc_command(["config", "device", "add", vps_id, "eth0", "nic", 
                      "network=lxcbr0", "name=eth0", "type=nic"])
@@ -894,7 +919,7 @@ async def cmd_show_ssh(ix: discord.Interaction):
         container_name = vps["container_id"] or vps["vps_id"]
         running = lxc_is_running(container_name) if lxc_exists(container_name) else False
         
-        direct_ssh_cmd = f"ssh root@{SERVER_IP} -p {vps['ssh_port']}"
+        direct_ssh_cmd = f"ssh root -p {vps['ssh_port']}"
         
         await ix.followup.send(embed=em(
             "🔑 Your SSH Credentials",
@@ -964,7 +989,7 @@ async def cmd_regen_ssh(ix: discord.Interaction, vps_id: str = None):
         
         try:
             dm = await ix.user.create_dm()
-            direct_ssh_cmd = f"ssh root@{SERVER_IP} -p {vps['ssh_port']}"
+            direct_ssh_cmd = f"ssh root -p {vps['ssh_port']}"
             await dm.send(embed=em(
                 "🔄 SSH Credentials Regenerated",
                 f"**{vps['vps_id']}**\n\n"
@@ -1162,7 +1187,7 @@ async def cmd_admin_create(
             """, (vps_id, user.id, container_id, image, os_label,
                   ram, cpu, disk, host_port, root_pass, ssh_backup, exp_at))
         
-        direct_ssh_cmd = f"ssh root@{SERVER_IP} -p {host_port}"
+        direct_ssh_cmd = f"ssh root -p {host_port}"
         
         dm_ok = False
         try:
@@ -1482,7 +1507,7 @@ async def cmd_deploy_prefix(ctx: commands.Context):
             """, (vps_id, ctx.author.id, container_id, image, os_label,
                   ram, cpu, disk, host_port, root_pass, ssh_backup))
         
-        direct_ssh_cmd = f"ssh root@{SERVER_IP} -p {host_port}"
+        direct_ssh_cmd = f"ssh root -p {host_port}"
         dm_ok = False
         
         try:
