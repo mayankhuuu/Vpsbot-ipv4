@@ -5,13 +5,12 @@
 ║  • Full root access in their container               ║
 ║  • Direct SSH access with password                   ║
 ║  • 1 container per user limit                        ║
-║  • Default: 32GB RAM, 4 CPU, 80GB Disk              ║
+║  • Default: 32GB RAM, 6 CPU, 80GB Disk              ║
 ║  • Anti-mining protection                            ║
 ║  • FIXED: IPv4 networking with lxcbr0               ║
 ║  • TMATE Backup SSH included                         ║
-║  • SSHX Browser SSH included                         ║
 ║  • Admin can create VPS for any user                 ║
-║  • Regen SSH + Regen SSHX commands                   ║
+║  • !deploy command for users                         ║
 ╚═══════════════════════════════════════════════════════╝
 """
 
@@ -63,7 +62,7 @@ LXC_STORAGE_POOL = os.getenv("LXC_STORAGE_POOL", "default")
 LXC_NETWORK_BRIDGE = os.getenv("LXC_NETWORK_BRIDGE", "lxcbr0")
 
 DEFAULT_RAM_MB = int(os.getenv("DEFAULT_RAM_MB", "32768"))
-DEFAULT_CPU_CORES = float(os.getenv("DEFAULT_CPU_CORES", "4"))
+DEFAULT_CPU_CORES = float(os.getenv("DEFAULT_CPU_CORES", "6"))
 DEFAULT_DISK_GB = int(os.getenv("DEFAULT_DISK_GB", "80"))
 
 LXC_IMAGES = {
@@ -136,7 +135,6 @@ def init_db():
                     ssh_port     INTEGER DEFAULT NULL,
                     root_pass    TEXT    DEFAULT '',
                     ssh_cmd      TEXT    DEFAULT '',
-                    sshx_url     TEXT    DEFAULT '',
                     status       TEXT    DEFAULT 'running',
                     expires_at   TEXT    DEFAULT NULL,
                     mining_flag  INTEGER DEFAULT 0,
@@ -399,7 +397,7 @@ def fake_cpuinfo(cores):
     return "\n".join(blocks)
 
 # ─────────────────────────────────────────────────────
-# CORE VPS PROVISION - FIXED WITH LXCBR0 + SSHX
+# CORE VPS PROVISION - NO SSHX
 # ─────────────────────────────────────────────────────
 def provision(vps_id, image, os_label, ram_mb, cpu_cores, disk_gb, host_port, root_pass):
     log.info(f"[{vps_id}] Provisioning LXC — RAM:{ram_mb}MB CPU:{cpu_cores} Disk:{disk_gb}GB")
@@ -411,7 +409,6 @@ def provision(vps_id, image, os_label, ram_mb, cpu_cores, disk_gb, host_port, ro
 
     log.info(f"[{vps_id}] Creating LXC container from {image}...")
     
-    # Create container
     try:
         lxc_command(["init", image, vps_id])
         log.info(f"[{vps_id}] Container created")
@@ -421,7 +418,6 @@ def provision(vps_id, image, os_label, ram_mb, cpu_cores, disk_gb, host_port, ro
     
     time.sleep(2)
     
-    # Add network device with lxcbr0
     try:
         lxc_command(["config", "device", "add", vps_id, "eth0", "nic", 
                      "network=lxcbr0", "name=eth0", "type=nic"])
@@ -429,7 +425,6 @@ def provision(vps_id, image, os_label, ram_mb, cpu_cores, disk_gb, host_port, ro
     except Exception as e:
         log.warning(f"[{vps_id}] Network device add failed: {e}")
     
-    # Set static IP
     ip_suffix = random.randint(100, 250)
     static_ip = f"10.0.3.{ip_suffix}"
     try:
@@ -439,7 +434,6 @@ def provision(vps_id, image, os_label, ram_mb, cpu_cores, disk_gb, host_port, ro
     except Exception as e:
         log.warning(f"[{vps_id}] Static IP set failed: {e}")
     
-    # Configure resources
     configs = [
         (["config", "set", vps_id, "limits.memory", f"{ram_mb}MB"], "memory"),
         (["config", "set", vps_id, "limits.cpu", str(int(cpu_cores))], "cpu"),
@@ -474,7 +468,6 @@ def provision(vps_id, image, os_label, ram_mb, cpu_cores, disk_gb, host_port, ro
     
     log.info(f"[{vps_id}] Container IP: {container_ip}")
     
-    # Install packages
     log.info(f"[{vps_id}] Running apt update...")
     for i in range(3):
         try:
@@ -489,17 +482,10 @@ def provision(vps_id, image, os_label, ram_mb, cpu_cores, disk_gb, host_port, ro
         "openssh-server tmate neofetch curl wget sudo procps net-tools "
         "iproute2 htop systemd systemd-sysv", check=False)
     
-    # Install sshx
-    log.info(f"[{vps_id}] Installing sshx...")
-    lxc_exec(vps_id, "curl -sSL https://sshx.io/get | sh", check=False)
-    time.sleep(2)
-    
-    # Set root password
     log.info(f"[{vps_id}] Setting root password...")
     lxc_exec(vps_id, f"echo 'root:{root_pass}' | chpasswd", check=False)
     lxc_exec(vps_id, "mkdir -p /run/sshd", check=False)
     
-    # Configure SSH
     ssh_config = """
 sed -i 's/^#\\?PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
 sed -i 's/^#\\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
@@ -517,7 +503,6 @@ grep -q '^PasswordAuthentication' /etc/ssh/sshd_config || echo 'PasswordAuthenti
     
     time.sleep(5)
     
-    # Port forwarding with lxcbr0
     if container_ip:
         log.info(f"[{vps_id}] Setting up port forwarding: {host_port} -> {container_ip}:22")
         try:
@@ -556,7 +541,6 @@ exit 0
     lxc_file_push(vps_id, mount_script, "/etc/rc.local")
     lxc_exec(vps_id, "chmod +x /etc/rc.local", check=False)
     
-    # Hostname and MOTD
     lxc_exec(vps_id, f"hostnamectl set-hostname {vps_id} 2>/dev/null || hostname {vps_id}", check=False)
     lxc_exec(vps_id, f"echo {vps_id} > /etc/hostname", check=False)
     
@@ -574,7 +558,7 @@ exit 0
     lxc_file_push(vps_id, motd, "/etc/motd")
     
     # TMATE BACKUP SSH
-    log.info(f"[{vps_id}] Starting tmate SSH (BACKUP) session...")
+    log.info(f"[{vps_id}] Starting tmate SSH session...")
     sock = "/tmp/tmate.sock"
     lxc_exec(vps_id, f"rm -f {sock}; tmate -S {sock} new-session -d", check=False)
     time.sleep(5)
@@ -583,18 +567,10 @@ exit 0
     ssh_backup = result.strip() if result else ""
     log.info(f"[{vps_id}] tmate backup SSH ready: {ssh_backup}")
     
-    # SSHX BROWSER SSH
-    log.info(f"[{vps_id}] Starting sshx session...")
-    lxc_exec(vps_id, "nohup sshx 2>/tmp/sshx.log &", check=False)
-    time.sleep(5)
-    result = lxc_exec(vps_id, "grep -o 'https://sshx.io/[^ ]*' /tmp/sshx.log 2>/dev/null | head -1", check=False)
-    sshx_url = result.strip() if result else ""
-    log.info(f"[{vps_id}] sshx URL: {sshx_url}")
-    
     lxc_command(["config", "set", vps_id, "user.vps-id", vps_id])
     lxc_command(["config", "set", vps_id, "user.managed-by", "DXD"])
     
-    return vps_id, ssh_backup, container_ip, sshx_url
+    return vps_id, ssh_backup, container_ip
 
 # ─────────────────────────────────────────────────────
 # EMBED HELPER
@@ -632,6 +608,16 @@ def is_admin(ix):
             return False
     return False
 
+def is_admin_prefix(user):
+    if user.id in ADMIN_USER_IDS:
+        return True
+    if user.guild:
+        try:
+            return any(r.id == ADMIN_ROLE_ID for r in user.roles)
+        except:
+            return False
+    return False
+
 def owns(uid: int, vid: str) -> bool:
     with get_db() as c:
         return bool(c.execute("SELECT 1 FROM vps WHERE vps_id=? AND owner_id=?", (vid, uid)).fetchone())
@@ -656,6 +642,7 @@ def get_user_vps(uid):
 # ─────────────────────────────────────────────────────
 intents = discord.Intents.default()
 intents.members = True
+intents.message_content = True  # For prefix commands
 
 class DXD(commands.Bot):
     def __init__(self):
@@ -702,7 +689,7 @@ async def update_status():
             if count:
                 await bot.change_presence(activity=discord.Activity(
                     type=discord.ActivityType.watching,
-                    name=f"VPS | {count['n']} Running"))
+                    name=f"DXD | {count['n']} VPS Running"))
     except Exception as e:
         log.warning(f"Status update failed: {e}")
 
@@ -788,127 +775,6 @@ async def _before_anti_mining():
 # ─────────────────────────────────────────────────────
 # USER COMMANDS
 # ─────────────────────────────────────────────────────
-@bot.tree.command(name="create", description="Create your own VPS (32GB RAM, 4 CPU, 80GB Disk)")
-async def cmd_create(ix: discord.Interaction):
-    try:
-        await ix.response.defer(ephemeral=True)
-        
-        if has_vps(ix.user.id):
-            return await ix.followup.send(embed=em(
-                "❌ Already Have VPS",
-                "You already have a VPS. Only 1 VPS per user.",
-                RED
-            ))
-        
-        with get_db() as c:
-            allowed = c.execute("SELECT 1 FROM allowed_users WHERE user_id=?", (ix.user.id,)).fetchone()
-            if not allowed and not is_admin(ix):
-                return await ix.followup.send(embed=em(
-                    "⛔ Not Authorized",
-                    "You are not authorized to create a VPS. Contact an admin.",
-                    RED
-                ))
-        
-        vps_id = next_id()
-        root_pass = gen_root_password()
-        host_port = find_free_port()
-        
-        ram = DEFAULT_RAM_MB
-        cpu = DEFAULT_CPU_CORES
-        disk = DEFAULT_DISK_GB
-        os_key = "ubuntu22"
-        image, os_label = LXC_IMAGES[os_key]
-        
-        await ix.followup.send(embed=em(
-            "⏳ Creating VPS...",
-            f"**{vps_id}** for {ix.user.mention}\n\n"
-            "```\n"
-            "[1/5] Creating LXC container      ⏳\n"
-            "[2/5] Configuring network         ⏳\n"
-            "[3/5] Installing packages         ⏳\n"
-            "[4/5] Setting up SSH             ⏳\n"
-            "[5/5] Starting services          ⏳\n"
-            "```\n"
-            "⏱ ~90 seconds — SSH sent to DM.",
-            BLUE,
-            [
-                ("🖥 OS", os_label, True),
-                ("🧠 RAM", f"{ram} MB (32 GB)", True),
-                ("💻 CPU", f"{cpu} Core(s)", True),
-                ("💾 Disk", f"{disk} GB", True),
-            ]
-        ))
-        
-        try:
-            container_id, ssh_backup, container_ip, sshx_url = await asyncio.get_event_loop().run_in_executor(
-                None, lambda: provision(vps_id, image, os_label, ram, cpu, disk, host_port, root_pass)
-            )
-        except Exception as e:
-            log.error(f"[{vps_id}] Failed: {e}")
-            if lxc_exists(vps_id):
-                lxc_delete(vps_id)
-            return await ix.followup.send(embed=em(
-                "❌ Provisioning Failed",
-                f"**{vps_id}** could not be created.\n```{str(e)[:300]}```",
-                RED
-            ))
-        
-        with get_db() as c:
-            c.execute("""
-                INSERT INTO vps (vps_id, owner_id, container_id, os_image, os_label,
-                    ram_mb, cpu_cores, disk_gb, ssh_port, root_pass, ssh_cmd, sshx_url, status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running')
-            """, (vps_id, ix.user.id, container_id, image, os_label,
-                  ram, cpu, disk, host_port, root_pass, ssh_backup, sshx_url))
-        
-        direct_ssh_cmd = f"ssh root@{SERVER_IP} -p {host_port}"
-        dm_ok = False
-        
-        try:
-            dm = await ix.user.create_dm()
-            await dm.send(embed=em(
-                "⚡ Your VPS is Ready",
-                f"**{vps_id}** is ready!\n\n"
-                f"**🔑 MAIN SSH:**\n"
-                f"```{direct_ssh_cmd}```\n"
-                f"**Password:** ```{root_pass}```\n\n"
-                f"**🔄 BACKUP SSH (tmate):**\n"
-                f"```{ssh_backup}```\n\n"
-                f"**🌐 SSHX (Browser SSH):**\n"
-                f"🔗 **{sshx_url or 'https://sshx.io'}**\n\n"
-                f"**Specs:**\n"
-                f"• RAM: 32 GB (32768 MB)\n"
-                f"• CPU: 4 Cores\n"
-                f"• Disk: 80 GB\n\n"
-                f"⚠️ **Keep your password safe!**",
-                GREEN
-            ))
-            dm_ok = True
-        except:
-            pass
-        
-        await ix.followup.send(embed=em(
-            "✅ VPS Created",
-            f"**{vps_id}** is live!\n"
-            f"{'✅ SSH sent to DM.' if dm_ok else '⚠️ Could not DM you.'}",
-            GREEN,
-            [
-                ("🆔 VPS ID", vps_id, True),
-                ("🖥 OS", os_label, True),
-                ("🧠 RAM", "32 GB", True),
-                ("💻 CPU", "4 Core(s)", True),
-                ("💾 Disk", "80 GB", True),
-                ("📡 SSH Port", f"`{host_port}`", True),
-            ]
-        ))
-    except Exception as e:
-        log.error(f"Create command error: {e}")
-        log.error(traceback.format_exc())
-        try:
-            await ix.followup.send(embed=em("❌ Error", f"Something went wrong: {str(e)[:200]}", RED))
-        except:
-            pass
-
 @bot.tree.command(name="my-vps", description="View your VPS info")
 async def cmd_my_vps(ix: discord.Interaction):
     try:
@@ -916,18 +782,16 @@ async def cmd_my_vps(ix: discord.Interaction):
         
         vps = get_user_vps(ix.user.id)
         if not vps:
-            return await ix.followup.send(embed=em("❌ No VPS", "You don't have a VPS. Use `/create`.", RED))
+            return await ix.followup.send(embed=em("❌ No VPS", "You don't have a VPS. Use `!deploy`.", RED))
         
         container_name = vps["container_id"] or vps["vps_id"]
         running = lxc_is_running(container_name) if lxc_exists(container_name) else False
-        ip = lxc_get_ip(container_name) if running else ""
         ram_gb = vps["ram_mb"] / 1024
         
         await ix.followup.send(embed=em(
             "📊 Your VPS",
             f"**VPS ID:** `{vps['vps_id']}`\n"
             f"**Status:** {'🟢 Running' if running else '🔴 Stopped'}\n"
-            f"**IP:** {ip or 'N/A'}\n"
             f"**SSH Port:** `{vps['ssh_port']}`\n"
             f"**OS:** {vps['os_label']}\n"
             f"**RAM:** {vps['ram_mb']} MB ({ram_gb:.0f} GB)\n"
@@ -1018,33 +882,6 @@ async def cmd_restart(ix: discord.Interaction):
         except:
             pass
 
-@bot.tree.command(name="delete-vps", description="Delete your VPS (WARNING: All data lost)")
-async def cmd_delete_vps(ix: discord.Interaction):
-    try:
-        await ix.response.defer(ephemeral=True)
-        
-        vps = get_user_vps(ix.user.id)
-        if not vps:
-            return await ix.followup.send(embed=em("❌ No VPS", "You don't have a VPS.", RED))
-        
-        container_name = vps["container_id"] or vps["vps_id"]
-        if lxc_exists(container_name):
-            lxc_delete(container_name)
-        
-        with get_db() as c:
-            c.execute("DELETE FROM vps WHERE vps_id=?", (vps["vps_id"],))
-        
-        await ix.followup.send(embed=em("🗑 Deleted", f"**{vps['vps_id']}** permanently deleted.", YELLOW))
-    except Exception as e:
-        log.error(f"delete-vps command error: {e}")
-        try:
-            await ix.followup.send(embed=em("❌ Error", str(e)[:200], RED))
-        except:
-            pass
-
-# ─────────────────────────────────────────────────────
-# SSH COMMANDS
-# ─────────────────────────────────────────────────────
 @bot.tree.command(name="show-ssh", description="Show your VPS SSH credentials")
 async def cmd_show_ssh(ix: discord.Interaction):
     try:
@@ -1068,8 +905,6 @@ async def cmd_show_ssh(ix: discord.Interaction):
             f"**Password:** ```{vps['root_pass']}```\n\n"
             f"**🔄 BACKUP SSH (tmate):**\n"
             f"```{vps['ssh_cmd'] or 'Not available'}```\n\n"
-            f"**🌐 SSHX (Browser):**\n"
-            f"🔗 **{vps['sshx_url'] or 'https://sshx.io'}**\n\n"
             f"📡 **Port:** `{vps['ssh_port']}`",
             GREEN if running else YELLOW
         ))
@@ -1158,8 +993,8 @@ async def cmd_regen_ssh(ix: discord.Interaction, vps_id: str = None):
         except:
             pass
 
-@bot.tree.command(name="sshx", description="Get SSHX browser SSH session for your VPS")
-async def cmd_sshx(ix: discord.Interaction):
+@bot.tree.command(name="delete-vps", description="Delete your VPS (WARNING: All data lost)")
+async def cmd_delete_vps(ix: discord.Interaction):
     try:
         await ix.response.defer(ephemeral=True)
         
@@ -1167,108 +1002,16 @@ async def cmd_sshx(ix: discord.Interaction):
         if not vps:
             return await ix.followup.send(embed=em("❌ No VPS", "You don't have a VPS.", RED))
         
-        if vps["status"] == "suspended":
-            return await ix.followup.send(embed=em("⛔ Suspended", "Your VPS is suspended. Contact admin.", RED))
-        
         container_name = vps["container_id"] or vps["vps_id"]
+        if lxc_exists(container_name):
+            lxc_delete(container_name)
         
-        if not lxc_exists(container_name) or not lxc_is_running(container_name):
-            return await ix.followup.send(embed=em("⚠️ Not Running", "Start your VPS first with `/start`.", YELLOW))
+        with get_db() as c:
+            c.execute("DELETE FROM vps WHERE vps_id=?", (vps["vps_id"],))
         
-        # Get existing sshx or create new
-        sshx_url = vps["sshx_url"]
-        if not sshx_url or "sshx.io" not in sshx_url:
-            log.info(f"[{vps['vps_id']}] Starting new sshx session...")
-            lxc_exec(container_name, "pkill -f sshx 2>/dev/null", check=False)
-            time.sleep(2)
-            lxc_exec(container_name, "nohup sshx 2>/tmp/sshx.log &", check=False)
-            time.sleep(5)
-            result = lxc_exec(container_name, "grep -o 'https://sshx.io/[^ ]*' /tmp/sshx.log 2>/dev/null | head -1", check=False)
-            sshx_url = result.strip() if result else ""
-            if sshx_url:
-                with get_db() as c:
-                    c.execute("UPDATE vps SET sshx_url=? WHERE vps_id=?", (sshx_url, vps["vps_id"]))
-        
-        await ix.followup.send(embed=em(
-            "🌐 SSHX Session",
-            f"**{vps['vps_id']}**\n\n"
-            f"🔗 **Click to access your VPS in browser:**\n"
-            f"{sshx_url or 'https://sshx.io'}\n\n"
-            f"💡 **SSHX works in any browser - no SSH client needed!**\n"
-            f"⚠️ **Session expires after inactivity**",
-            GREEN if sshx_url else YELLOW
-        ))
-        
-        try:
-            dm = await ix.user.create_dm()
-            await dm.send(embed=em(
-                "🌐 SSHX Session",
-                f"**{vps['vps_id']}**\n\n"
-                f"🔗 **{sshx_url or 'https://sshx.io'}**",
-                GREEN
-            ))
-        except:
-            pass
-            
+        await ix.followup.send(embed=em("🗑 Deleted", f"**{vps['vps_id']}** permanently deleted.", YELLOW))
     except Exception as e:
-        log.error(f"sshx command error: {e}")
-        try:
-            await ix.followup.send(embed=em("❌ Error", str(e)[:200], RED))
-        except:
-            pass
-
-@bot.tree.command(name="regen-sshx", description="Regenerate SSHX session for your VPS")
-async def cmd_regen_sshx(ix: discord.Interaction):
-    try:
-        await ix.response.defer(ephemeral=True)
-        
-        vps = get_user_vps(ix.user.id)
-        if not vps:
-            return await ix.followup.send(embed=em("❌ No VPS", "You don't have a VPS.", RED))
-        
-        if vps["status"] == "suspended":
-            return await ix.followup.send(embed=em("⛔ Suspended", "Your VPS is suspended. Contact admin.", RED))
-        
-        container_name = vps["container_id"] or vps["vps_id"]
-        
-        if not lxc_exists(container_name) or not lxc_is_running(container_name):
-            return await ix.followup.send(embed=em("⚠️ Not Running", "Start your VPS first with `/start`.", YELLOW))
-        
-        # Kill old sshx and start new
-        lxc_exec(container_name, "pkill -f sshx 2>/dev/null", check=False)
-        time.sleep(2)
-        
-        lxc_exec(container_name, "nohup sshx 2>/tmp/sshx.log &", check=False)
-        time.sleep(5)
-        result = lxc_exec(container_name, "grep -o 'https://sshx.io/[^ ]*' /tmp/sshx.log 2>/dev/null | head -1", check=False)
-        sshx_url = result.strip() if result else ""
-        
-        if sshx_url:
-            with get_db() as c:
-                c.execute("UPDATE vps SET sshx_url=? WHERE vps_id=?", (sshx_url, vps["vps_id"]))
-        
-        await ix.followup.send(embed=em(
-            "🔄 SSHX Session Regenerated",
-            f"**{vps['vps_id']}**\n\n"
-            f"🔗 **New SSHX URL:**\n"
-            f"{sshx_url or 'https://sshx.io'}\n\n"
-            f"⚠️ **Old session expired!**",
-            GREEN if sshx_url else YELLOW
-        ))
-        
-        try:
-            dm = await ix.user.create_dm()
-            await dm.send(embed=em(
-                "🔄 New SSHX Session",
-                f"**{vps['vps_id']}**\n\n"
-                f"🔗 **{sshx_url or 'https://sshx.io'}**",
-                GREEN
-            ))
-        except:
-            pass
-            
-    except Exception as e:
-        log.error(f"regen-sshx command error: {e}")
+        log.error(f"delete-vps command error: {e}")
         try:
             await ix.followup.send(embed=em("❌ Error", str(e)[:200], RED))
         except:
@@ -1315,7 +1058,7 @@ async def cmd_rm(ix: discord.Interaction, user: discord.Member):
 @app_commands.describe(
     user="User to create VPS for",
     ram="RAM in MB (default: 32768 = 32GB)",
-    cpu="CPU cores (default: 4)",
+    cpu="CPU cores (default: 6)",
     disk="Disk in GB (default: 80)",
     os="Operating System",
     days="Auto-suspend after days (0 = never)"
@@ -1333,7 +1076,7 @@ async def cmd_admin_create(
     ix: discord.Interaction, 
     user: discord.Member, 
     ram: int = 32768, 
-    cpu: float = 4.0, 
+    cpu: float = 6.0, 
     disk: int = 80,
     os: app_commands.Choice[str] = None,
     days: int = 0
@@ -1398,7 +1141,7 @@ async def cmd_admin_create(
         ))
         
         try:
-            container_id, ssh_backup, container_ip, sshx_url = await asyncio.get_event_loop().run_in_executor(
+            container_id, ssh_backup, container_ip = await asyncio.get_event_loop().run_in_executor(
                 None, lambda: provision(vps_id, image, os_label, ram, cpu, disk, host_port, root_pass)
             )
         except Exception as e:
@@ -1414,10 +1157,10 @@ async def cmd_admin_create(
         with get_db() as c:
             c.execute("""
                 INSERT INTO vps (vps_id, owner_id, container_id, os_image, os_label,
-                    ram_mb, cpu_cores, disk_gb, ssh_port, root_pass, ssh_cmd, sshx_url, status, expires_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', ?)
+                    ram_mb, cpu_cores, disk_gb, ssh_port, root_pass, ssh_cmd, status, expires_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', ?)
             """, (vps_id, user.id, container_id, image, os_label,
-                  ram, cpu, disk, host_port, root_pass, ssh_backup, sshx_url, exp_at))
+                  ram, cpu, disk, host_port, root_pass, ssh_backup, exp_at))
         
         direct_ssh_cmd = f"ssh root@{SERVER_IP} -p {host_port}"
         
@@ -1432,8 +1175,6 @@ async def cmd_admin_create(
                 f"**Password:** ```{root_pass}```\n\n"
                 f"**🔄 BACKUP SSH (tmate):**\n"
                 f"```{ssh_backup}```\n\n"
-                f"**🌐 SSHX (Browser SSH):**\n"
-                f"🔗 **{sshx_url or 'https://sshx.io'}**\n\n"
                 f"**Specs:**\n"
                 f"• RAM: {ram} MB ({ram//1024} GB)\n"
                 f"• CPU: {cpu} Core(s)\n"
@@ -1670,6 +1411,129 @@ async def cmd_resolve_mining(ix: discord.Interaction, log_id: int):
             pass
 
 # ─────────────────────────────────────────────────────
+# PREFIX COMMANDS (!)
+# ─────────────────────────────────────────────────────
+@bot.command(name="deploy")
+async def cmd_deploy_prefix(ctx: commands.Context):
+    """Deploy your own VPS (6 CPU, 32GB RAM, 80GB Disk)"""
+    try:
+        # Check if user already has VPS (1 VPS per user)
+        if has_vps(ctx.author.id):
+            await ctx.send(embed=em(
+                "❌ Already Have VPS",
+                "You already have a VPS. Only 1 VPS per user.",
+                RED
+            ))
+            return
+        
+        # Check if user is allowed
+        with get_db() as c:
+            allowed = c.execute("SELECT 1 FROM allowed_users WHERE user_id=?", (ctx.author.id,)).fetchone()
+            if not allowed and not is_admin_prefix(ctx.author):
+                await ctx.send(embed=em(
+                    "⛔ Not Authorized",
+                    "You are not authorized to create a VPS. Contact an admin.",
+                    RED
+                ))
+                return
+        
+        vps_id = next_id()
+        root_pass = gen_root_password()
+        host_port = find_free_port()
+        
+        # SPECS: 6 CPU, 32GB RAM, 80GB Disk
+        ram = 32768
+        cpu = 6.0
+        disk = 80
+        os_key = "ubuntu22"
+        image, os_label = LXC_IMAGES[os_key]
+        
+        await ctx.send(embed=em(
+            "⏳ Deploying VPS...",
+            f"**{vps_id}** for {ctx.author.mention}\n\n"
+            "```\n"
+            "[1/5] Creating LXC container      ⏳\n"
+            "[2/5] Configuring network         ⏳\n"
+            "[3/5] Installing packages         ⏳\n"
+            "[4/5] Setting up SSH             ⏳\n"
+            "[5/5] Starting services          ⏳\n"
+            "```\n"
+            "⏱ ~90 seconds — SSH sent to DM.",
+            BLUE,
+            [
+                ("🖥 OS", os_label, True),
+                ("🧠 RAM", "32 GB (32768 MB)", True),
+                ("💻 CPU", "6 Core(s)", True),
+                ("💾 Disk", "80 GB", True),
+            ]
+        ))
+        
+        try:
+            container_id, ssh_backup, container_ip = await asyncio.get_event_loop().run_in_executor(
+                None, lambda: provision(vps_id, image, os_label, ram, cpu, disk, host_port, root_pass)
+            )
+        except Exception as e:
+            log.error(f"[{vps_id}] Failed: {e}")
+            if lxc_exists(vps_id):
+                lxc_delete(vps_id)
+            await ctx.send(embed=em(
+                "❌ Provisioning Failed",
+                f"**{vps_id}** could not be created.\n```{str(e)[:300]}```",
+                RED
+            ))
+            return
+        
+        with get_db() as c:
+            c.execute("""
+                INSERT INTO vps (vps_id, owner_id, container_id, os_image, os_label,
+                    ram_mb, cpu_cores, disk_gb, ssh_port, root_pass, ssh_cmd, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running')
+            """, (vps_id, ctx.author.id, container_id, image, os_label,
+                  ram, cpu, disk, host_port, root_pass, ssh_backup))
+        
+        direct_ssh_cmd = f"ssh root@{SERVER_IP} -p {host_port}"
+        dm_ok = False
+        
+        try:
+            dm = await ctx.author.create_dm()
+            await dm.send(embed=em(
+                "⚡ Your VPS is Ready",
+                f"**{vps_id}** is ready!\n\n"
+                f"**🔑 MAIN SSH:**\n"
+                f"```{direct_ssh_cmd}```\n"
+                f"**Password:** ```{root_pass}```\n\n"
+                f"**🔄 BACKUP SSH (tmate):**\n"
+                f"```{ssh_backup}```\n\n"
+                f"**Specs:**\n"
+                f"• RAM: 32 GB (32768 MB)\n"
+                f"• CPU: 6 Cores\n"
+                f"• Disk: 80 GB\n\n"
+                f"⚠️ **Keep your password safe!**",
+                GREEN
+            ))
+            dm_ok = True
+        except:
+            pass
+        
+        await ctx.send(embed=em(
+            "✅ VPS Deployed Successfully",
+            f"**{vps_id}** is live!\n"
+            f"{'✅ SSH sent to DM.' if dm_ok else '⚠️ Could not DM you.'}",
+            GREEN,
+            [
+                ("🆔 VPS ID", vps_id, True),
+                ("🖥 OS", os_label, True),
+                ("🧠 RAM", "32 GB", True),
+                ("💻 CPU", "6 Core(s)", True),
+                ("💾 Disk", "80 GB", True),
+                ("📡 SSH Port", f"`{host_port}`", True),
+            ]
+        ))
+    except Exception as e:
+        log.error(f"deploy command error: {e}")
+        await ctx.send(embed=em("❌ Error", f"Something went wrong: {str(e)[:200]}", RED))
+
+# ─────────────────────────────────────────────────────
 # COMMANDS LIST
 # ─────────────────────────────────────────────────────
 @bot.tree.command(name="commands", description="Show all commands")
@@ -1677,16 +1541,14 @@ async def cmd_commands(ix: discord.Interaction):
     try:
         await ix.response.defer(ephemeral=True)
         
-        u = em("👤 User Commands", "VPS Management (Default: 32GB RAM, 4 CPU, 80GB Disk)", BLUE, [
-            ("`/create`", "Create your VPS", False),
+        u = em("👤 User Commands", "VPS Management (Default: 32GB RAM, 6 CPU, 80GB Disk)", BLUE, [
+            ("`!deploy`", "Deploy your VPS (6 CPU, 32GB RAM, 80GB Disk)", False),
             ("`/my-vps`", "View your VPS info", False),
             ("`/start`", "Start your VPS", False),
             ("`/stop`", "Stop your VPS", False),
             ("`/restart`", "Restart your VPS", False),
             ("`/show-ssh`", "Show your SSH credentials", False),
             ("`/regen-ssh`", "Regenerate SSH password + tmate", False),
-            ("`/sshx`", "Get SSHX browser SSH session", False),
-            ("`/regen-sshx`", "Regenerate SSHX session", False),
             ("`/delete-vps`", "Delete your VPS (all data lost)", False),
             ("`/commands`", "Show this help", False),
         ])
@@ -1706,7 +1568,7 @@ async def cmd_commands(ix: discord.Interaction):
         
         r = em("📖 Default Specs", 
             f"**RAM:** 32 GB (32768 MB)\n"
-            f"**CPU:** 4 Cores\n"
+            f"**CPU:** 6 Cores\n"
             f"**Disk:** 80 GB\n"
             f"**OS:** Ubuntu 22.04\n\n"
             f"⚠️ **1 VPS per user limit**",
@@ -1738,7 +1600,7 @@ if __name__ == "__main__":
             raise SystemExit(1)
         
         init_db()
-        log.info("🚀 Starting DXD VPS Manager (32GB RAM, 4 CPU, 80GB Disk)...")
+        log.info("🚀 Starting DXD VPS Manager (32GB RAM, 6 CPU, 80GB Disk)...")
         bot.run(DISCORD_TOKEN, log_handler=None)
     except KeyboardInterrupt:
         log.info("Bot stopped by user")
